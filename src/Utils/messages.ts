@@ -24,7 +24,7 @@ import {
 	WAProto,
 	WATextMessage,
 } from '../Types'
-import { isJidGroup, isJidNewsletter, isJidStatusBroadcast, jidNormalizedUser } from '../WABinary'
+import { isJidGroup, isJidNewsLetter, isJidStatusBroadcast, jidNormalizedUser } from '../WABinary'
 import { sha256 } from './crypto'
 import { generateMessageID, getKeyAuthor, unixTimestampSeconds } from './generics'
 import { downloadContentFromMessage, encryptedStream, generateThumbnail, getAudioDuration, getAudioWaveform, MediaDownloadOptions, prepareStream } from './messages-media'
@@ -126,7 +126,7 @@ export const prepareWAMessageMedia = async(
 			!!uploadData.media.url &&
 			!!options.mediaCache && (
 	// generate the key
-		mediaType + ':' + uploadData.media.url.toString()
+		mediaType + ':' + uploadData.media.url!.toString()
 	)
 
 	if(mediaType === 'document' && !uploadData.fileName) {
@@ -213,6 +213,11 @@ export const prepareWAMessageMedia = async(
 					logger?.debug('processed waveform')
 				}
 
+				if(requiresWaveformProcessing) {
+					uploadData.waveform = await getAudioWaveform(bodyPath!, logger)
+					logger?.debug('processed waveform')
+				}
+
 				if(requiresAudioBackground) {
 					uploadData.backgroundArgb = await assertColor(options.backgroundColor)
 					logger?.debug('computed backgroundColor audio status')
@@ -227,6 +232,7 @@ export const prepareWAMessageMedia = async(
 				if (!Buffer.isBuffer(encWriteStream)) {
 					encWriteStream.destroy()
 				}
+
 				// remove tmp files
 				if(didSaveToTmpPath && bodyPath) {
 					await fs.unlink(bodyPath)
@@ -238,7 +244,7 @@ export const prepareWAMessageMedia = async(
 	const obj = WAProto.Message.fromObject({
 		[`${mediaType}Message`]: MessageTypeProto[mediaType].fromObject(
 			{
-				url: handle ? undefined : mediaUrl,
+				url:  handle ? undefined : mediaUrl,
 				directPath,
 				mediaKey: mediaKey,
 				fileEncSha256: fileEncSha256,
@@ -250,7 +256,7 @@ export const prepareWAMessageMedia = async(
 			}
 		)
 	})
-	
+
 	if(uploadData.ptv) {
 		obj.ptvMessage = obj.videoMessage
 		delete obj.videoMessage
@@ -393,31 +399,6 @@ export const generateWAMessageContent = async(
 			(message.disappearingMessagesInChat ? WA_DEFAULT_EPHEMERAL : 0) :
 			message.disappearingMessagesInChat
 		m = prepareDisappearingMessageSettingContent(exp)
-	} else if('groupInvite' in message) {
-		m.groupInviteMessage = {}
-		m.groupInviteMessage.inviteCode = message.groupInvite.inviteCode
-		m.groupInviteMessage.inviteExpiration = message.groupInvite.inviteExpiration
-		m.groupInviteMessage.caption = message.groupInvite.text
-		m.groupInviteMessage.groupJid = message.groupInvite.jid
-		m.groupInviteMessage.groupName = message.groupInvite.subject
-		//TODO: use built-in interface and get disappearing mode info etc.
-		//TODO: cache / use store!?
-		if(options.getProfilePicUrl) {
-			const pfpUrl = await options.getProfilePicUrl(message.groupInvite.jid, 'preview')
-			if(pfpUrl) {
-				const resp = await axios.get(pfpUrl, { responseType: 'arraybuffer' })
-				if(resp.status === 200) {
-					m.groupInviteMessage.jpegThumbnail = resp.data
-				}
-			}
-		}
-	} else if('pin' in message) {
-		m.pinInChatMessage = {}
-		m.messageContextInfo = {}
-		m.pinInChatMessage.key = message.pin
-		m.pinInChatMessage.type = message.type
-		m.pinInChatMessage.senderTimestampMs = Date.now()
-		m.messageContextInfo.messageAddOnDurationInSecs = message.type === 1 ? message.time || 86400 : 0
 	} else if('buttonReply' in message) {
 		switch (message.type) {
 		case 'template':
@@ -435,12 +416,6 @@ export const generateWAMessageContent = async(
 			}
 			break
 		}
-	} else if('ptv' in message && message.ptv) {
-		const { videoMessage } = await prepareWAMessageMedia(
-			{ video: message.video },
-			options
-		)
-		m.ptvMessage = videoMessage
 	} else if('product' in message) {
 		const { imageMessage } = await prepareWAMessageMedia(
 			{ image: message.product.productImage },
@@ -457,7 +432,6 @@ export const generateWAMessageContent = async(
 		m.listResponseMessage = { ...message.listReply }
 	} else if('poll' in message) {
 		message.poll.selectableCount ||= 0
-		message.poll.toAnnouncementGroup ||= false
 
 		if(!Array.isArray(message.poll.values)) {
 			throw new Boom('Invalid poll values', { statusCode: 400 })
@@ -554,7 +528,7 @@ export const generateWAMessageContent = async(
 			title: message.title,
 			footerText: message.footer,
 			description: message.text,
-			listType: message.hasOwnProperty('listType') ? message.listType : proto.Message.ListMessage.ListType.PRODUCT_LIST
+			listType: proto.Message.ListMessage.ListType.SINGLE_SELECT
 		}
 
 		m = { listMessage }
@@ -606,34 +580,31 @@ export const generateWAMessageFromContent = (
 	const timestamp = unixTimestampSeconds(options.timestamp)
 	const { quoted, userJid } = options
 
-	// only set quoted if isn't a newsletter message
-	if(quoted && !isJidNewsletter(jid)) {
+	if(quoted) {
 		const participant = quoted.key.fromMe ? userJid : (quoted.participant || quoted.key.participant || quoted.key.remoteJid)
 
 		let quotedMsg = normalizeMessageContent(quoted.message)!
 		const msgType = getContentType(quotedMsg)!
 		// strip any redundant properties
-		if(quotedMsg) {
-		    quotedMsg = proto.Message.fromObject({ [msgType]: quotedMsg[msgType] })
+		quotedMsg = proto.Message.fromObject({ [msgType]: quotedMsg[msgType] })
 
-		    const quotedContent = quotedMsg[msgType]
-		    if(typeof quotedContent === 'object' && quotedContent && 'contextInfo' in quotedContent) {
-			    delete quotedContent.contextInfo
-		    }
-
-		    const contextInfo: proto.IContextInfo = innerMessage[key].contextInfo || { }
-		    contextInfo.participant = jidNormalizedUser(participant!)
-		    contextInfo.stanzaId = quoted.key.id
-		    contextInfo.quotedMessage = quotedMsg
-
-		    // if a participant is quoted, then it must be a group
-		    // hence, remoteJid of group must also be entered
-		    if(jid !== quoted.key.remoteJid) {
-			    contextInfo.remoteJid = quoted.key.remoteJid
-		    }
-
-		    innerMessage[key].contextInfo = contextInfo
+		const quotedContent = quotedMsg[msgType]
+		if(typeof quotedContent === 'object' && quotedContent && 'contextInfo' in quotedContent) {
+			delete quotedContent.contextInfo
 		}
+
+		const contextInfo: proto.IContextInfo = innerMessage[key].contextInfo || { }
+		contextInfo.participant = jidNormalizedUser(participant!)
+		contextInfo.stanzaId = quoted.key.id
+		contextInfo.quotedMessage = quotedMsg
+
+		// if a participant is quoted, then it must be a group
+		// hence, remoteJid of group must also be entered
+		if(jid !== quoted.key.remoteJid) {
+			contextInfo.remoteJid = quoted.key.remoteJid
+		}
+
+		innerMessage[key].contextInfo = contextInfo
 	}
 
 	if(
@@ -642,9 +613,7 @@ export const generateWAMessageFromContent = (
 		// and it's not a protocol message -- delete, toggle disappear message
 		key !== 'protocolMessage' &&
 		// already not converted to disappearing message
-		key !== 'ephemeralMessage' &&
-		// newsletter not accept disappearing messages
-		!isJidNewsletter(jid)
+		key !== 'ephemeralMessage'
 	) {
 		innerMessage[key].contextInfo = {
 			...(innerMessage[key].contextInfo || {}),
@@ -681,7 +650,7 @@ export const generateWAMessage = async(
 		jid,
 		await generateWAMessageContent(
 			content,
-			{ newsletter: isJidNewsletter(jid!), ...options }
+			{ newsletter: isJidNewsLetter(jid!), ...options }
 		),
 		options
 	)
@@ -758,7 +727,7 @@ export const extractMessageContent = (content: WAMessageContent | undefined | nu
 	content = normalizeMessageContent(content)
 
 	if(content?.buttonsMessage) {
-	  return extractFromTemplateMessage(content.buttonsMessage)
+	  return extractFromTemplateMessage(content.buttonsMessage!)
 	}
 
 	if(content?.templateMessage?.hydratedFourRowTemplate) {

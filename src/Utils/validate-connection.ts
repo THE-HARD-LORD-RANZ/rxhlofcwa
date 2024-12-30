@@ -50,13 +50,14 @@ const getWebInfo = (config: SocketConfig): proto.ClientPayload.IWebInfo => {
 	return { webSubPlatform }
 }
 
+
 const getClientPayload = (config: SocketConfig) => {
 	const payload: proto.IClientPayload = {
 		connectType: proto.ClientPayload.ConnectType.WIFI_UNKNOWN,
 		connectReason: proto.ClientPayload.ConnectReason.USER_ACTIVATED,
 		userAgent: getUserAgent(config),
 	}
-	
+
 	if(!config.mobile) {
 		payload.webInfo = getWebInfo(config)
 	}
