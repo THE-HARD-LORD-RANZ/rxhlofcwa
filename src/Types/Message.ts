@@ -2,6 +2,7 @@ import { AxiosRequestConfig } from 'axios'
 import type { Logger } from 'pino'
 import type { Readable } from 'stream'
 import type { URL } from 'url'
+import { BinaryNode } from '../WABinary'
 import { proto } from '../../WAProto'
 import { MEDIA_HKDF_KEY_MAPPING } from '../Defaults'
 import type { GroupMetadata } from './GroupMetadata'
@@ -13,7 +14,7 @@ export type WAMessage = proto.IWebMessageInfo
 export type WAMessageContent = proto.IMessage
 export type WAContactMessage = proto.Message.IContactMessage
 export type WAContactsArrayMessage = proto.Message.IContactsArrayMessage
-export type WAMessageKey = proto.IMessageKey & {server_id?: string}
+export type WAMessageKey = proto.IMessageKey
 export type WATextMessage = proto.Message.IExtendedTextMessage
 export type WAContextInfo = proto.IContextInfo
 export type WALocationMessage = proto.Message.ILocationMessage
@@ -80,11 +81,8 @@ type Listable = {
     /** Title of a List Message only */
     title?: string
 
-    /** Text of the button on the list (required) */
+    /** Text of the bnutton on the list (required) */
     buttonText?: string
-    
-    /** ListType of a List Message only */
-    listType?: proto.Message.ListMessage.ListType
 }
 type WithDimensions = {
     width?: number
@@ -97,7 +95,6 @@ export type PollMessageOptions = {
     values: string[]
     /** 32 byte message secret to encrypt poll selections */
     messageSecret?: Uint8Array
-    toAnnouncementGroup?: boolean
 }
 
 type SharePhoneNumber = {
@@ -147,14 +144,6 @@ export type ButtonReplyInfo = {
     index: number
 }
 
-export type GroupInviteInfo = {
-    inviteCode: string
-    inviteExpiration: number
-    text: string
-    jid: string
-    subject: string
-}
-
 export type WASendableProduct = Omit<proto.Message.ProductMessage.IProductSnapshot, 'productImage'> & {
     productImage: WAMediaUpload
 }
@@ -184,18 +173,7 @@ export type AnyRegularMessageContent = (
         type: 'template' | 'plain'
     }
     | {
-        groupInvite: GroupInviteInfo
-    }
-    | {
         listReply: Omit<proto.Message.IListResponseMessage, 'contextInfo'>
-    }
-    | {
-        pin: WAMessageKey
-        type: proto.PinInChat.Type
-        /**
-         * 24 hours, 7 days, 30 days
-         */
-        time?: 86400 | 604800 | 2592000
     }
     | {
         product: WASendableProduct
@@ -220,20 +198,20 @@ export type GroupMetadataParticipants = Pick<GroupMetadata, 'participants'>
 type MinimalRelayOptions = {
     /** override the message ID with a custom provided string */
     messageId?: string
-    /** should we use group metadata cache, or fetch afresh from the server; default assumed to be "true" */
-    useCachedGroupMetadata?: boolean
+    /** cached group metadata, use to prevent redundant requests to WA & speed up msg sending */
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadataParticipants | undefined>
 }
 
 export type MessageRelayOptions = MinimalRelayOptions & {
     /** only send to a specific participant; used when a message decryption fails for a single user */
     participant?: { jid: string, count: number }
     /** additional attributes to add to the WA binary node */
-    additionalAttributes?: { [_: string]: string }
+    additionalAttributes?: { [_: string]: string }    
+    additionalNodes?: BinaryNode[];
     /** should we use the devices cache, or fetch afresh from the server; default assumed to be "true" */
     useUserDevicesCache?: boolean
     /** jid list of participants for status@broadcast */
     statusJidList?: string[]
-    newsletter?: boolean
 }
 
 export type MiscMessageGenerationOptions = MinimalRelayOptions & {
@@ -241,6 +219,7 @@ export type MiscMessageGenerationOptions = MinimalRelayOptions & {
 	timestamp?: Date
     /** the message you want to quote */
 	quoted?: WAMessage
+    additionalNodes?: BinaryNode[];
     /** disappearing messages settings */
     ephemeralExpiration?: number | string
     /** timeout for media upload to WA server */
@@ -253,7 +232,6 @@ export type MiscMessageGenerationOptions = MinimalRelayOptions & {
     font?: number
     /** if it is broadcast */
     broadcast?: boolean
-    newsletter?: boolean
 }
 export type MessageGenerationOptionsFromContent = MiscMessageGenerationOptions & {
 	userJid: string
@@ -277,13 +255,12 @@ export type MediaGenerationOptions = {
     backgroundColor?: string
 
     font?: number
-    
+
     /** The message is for newsletter? */
     newsletter?: boolean
 }
 export type MessageContentGenerationOptions = MediaGenerationOptions & {
 	getUrlInfo?: (text: string) => Promise<WAUrlInfo | undefined>
-	getProfilePicUrl?: (jid: string, type: 'image' | 'preview') => Promise<string | undefined>
 }
 export type MessageGenerationOptions = MessageContentGenerationOptions & MessageGenerationOptionsFromContent
 
