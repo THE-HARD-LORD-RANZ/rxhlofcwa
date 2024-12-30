@@ -29,11 +29,10 @@ import {
 	getCodeFromWSError,
 	getErrorCodeFromStreamError,
 	getNextPreKeysNode,
-	getPlatformId,
 	makeEventBuffer,
 	makeNoiseHandler,
 	printQRIfNecessaryListener,
-	promiseTimeout,
+	promiseTimeout
 } from '../Utils'
 import {
 	assertNodeErrorFree,
@@ -76,10 +75,10 @@ export const makeSocket = (config: SocketConfig) => {
 	if(config.mobile && url.protocol !== 'tcp:') {
 		url = new URL(`tcp://${MOBILE_ENDPOINT}:${MOBILE_PORT}`)
 	}
-	
+
 	if(!config.mobile && url.protocol === 'wss' && authState?.creds?.routingInfo) {
 		url.searchParams.append('ED', authState.creds.routingInfo.toString('base64url'))
-	}	
+	}
 
 	const ws = config.socket ? config.socket : config.mobile ? new MobileSocketClient(url, config) : new WebSocketClient(url, config)
 
@@ -526,7 +525,7 @@ export const makeSocket = (config: SocketConfig) => {
 						{
 							tag: 'companion_platform_id',
 							attrs: {},
-							content: getPlatformId(browser[1])
+							content: '49' // Chrome
 						},
 						{
 							tag: 'companion_platform_display',
@@ -548,11 +547,11 @@ export const makeSocket = (config: SocketConfig) => {
 	async function generatePairingKey() {
 		const salt = randomBytes(32)
 		const randomIv = randomBytes(16)
-		const key = await derivePairingCodeKey(authState.creds.pairingCode!, salt)
+		const key = derivePairingCodeKey(authState.creds.pairingCode!, salt)
 		const ciphered = aesEncryptCTR(authState.creds.pairingEphemeralKeyPair.public, key, randomIv)
 		return Buffer.concat([salt, randomIv, ciphered])
 	}
-	
+
 	const sendWAMBuffer = (wamBuffer: Buffer) => {
 		return query({
 			tag: 'iq',
@@ -572,7 +571,7 @@ export const makeSocket = (config: SocketConfig) => {
 	}
 
 	ws.on('message', onMessageReceived)
-	
+
 	ws.on('open', async() => {
 		try {
 			await validateConnection()
@@ -649,20 +648,15 @@ export const makeSocket = (config: SocketConfig) => {
 	})
 	// login complete
 	ws.on('CB:success', async(node: BinaryNode) => {
-		try {
-			await uploadPreKeysToServerIfRequired()
-			await sendPassiveIq('active')
-			
-			logger.info('opened connection to WA')
-			clearTimeout(qrTimer) // will never happen in all likelyhood -- but just in case WA sends success on first try
-			
-			ev.emit('creds.update', { me: { ...authState.creds.me!, lid: node.attrs.lid } })
-			
-			ev.emit('connection.update', { connection: 'open' })
-		} catch (err) {
-			logger.error({ err }, 'error opening connection')
-			end(err)
-		}
+		await uploadPreKeysToServerIfRequired()
+		await sendPassiveIq('active')
+
+		logger.info('opened connection to WA')
+		clearTimeout(qrTimer) // will never happen in all likelyhood -- but just in case WA sends success on first try
+
+		ev.emit('creds.update', { me: { ...authState.creds.me!, lid: node.attrs.lid } })
+
+		ev.emit('connection.update', { connection: 'open' })
 	})
 
 	ws.on('CB:stream:error', (node: BinaryNode) => {
@@ -681,13 +675,12 @@ export const makeSocket = (config: SocketConfig) => {
 	ws.on('CB:ib,,downgrade_webclient', () => {
 		end(new Boom('Multi-device beta not joined', { statusCode: DisconnectReason.multideviceMismatch }))
 	})
-	
+
 	ws.on('CB:ib,,edge_routing', (node: BinaryNode) => {
 		const edgeRoutingNode = getBinaryNodeChild(node, 'edge_routing')
 		const routingInfo = getBinaryNodeChild(edgeRoutingNode, 'routing_info')
 		if(routingInfo?.content) {
 			authState.creds.routingInfo = Buffer.from(routingInfo?.content as Uint8Array)
-			ev.emit('creds.update', authState.creds)
 		}
 	})
 
